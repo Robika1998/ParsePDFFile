@@ -1,5 +1,3 @@
-//ReleaseSlip_6121961
-
 const express = require("express");
 const multer = require("multer");
 const fs = require("fs").promises;
@@ -12,55 +10,47 @@ const upload = multer({ dest: "uploads/" });
 
 app.use(express.urlencoded({ extended: true }));
 
-const extractVin = (text) =>
-  text.match(/VIN:\s*([A-HJ-NPR-Z0-9]{17})/i)?.[1] || "N/A";
+const normalizeText = (text) => {
+  return text.replace(/\s+/g, " ").trim();
+};
+
+const extractOrderId = (text) => {
+  const match = text.match(/Order ID:\s*([A-Z0-9]+)/i);
+  return match ? match[1].trim() : "Unknown Order ID";
+};
+
+const extractVin = (text) => {
+  const match = text.match(/VIN:\s*([A-Z0-9]+)/i);
+  return match ? match[1].trim() : "Unknown VIN";
+};
 
 const extractVehicleInfo = (text) => {
-  const match = text.match(/Make:\s*(\w+)\s*Model:\s*([\w\s]+)/i);
-  return match ? `${match[1]} ${match[2]}` : "N/A";
+  const match = text.match(
+    /(\d{4})\s+([A-Za-z\s]+)\s+([A-Za-z]+)\s+([A-Za-z]+)\s+([A-Z0-9]+)/
+  );
+  return match
+    ? `${match[1]} ${match[2].trim()} ${match[3].trim()} ${match[4].trim()}`
+    : "Unknown Vehicle";
 };
 
 const extractPickupAndDeliveryInfo = (text) => {
-  const lines = text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line !== "");
-
-  const pickupHeaderIndex = lines.findIndex((line) =>
-    /Pick up location/i.test(line)
+  const pickupMatch = text.match(
+    /Pickup Information:([\s\S]*?)Delivery Information:/i
   );
-  const dropoffHeaderIndex = lines.findIndex((line) =>
-    /Drop off location/i.test(line)
+  const deliveryMatch = text.match(
+    /Delivery Information:([\s\S]*?)(DISPATCH INSTRUCTIONS|$)/i
   );
 
-  let pickupInfo = "N/A";
-  let deliveryInfo = "N/A";
+  const pickup = pickupMatch
+    ? `Pickup Information: ${normalizeText(pickupMatch[1])}`
+    : "Pickup Information: Not Found";
 
-  if (pickupHeaderIndex !== -1 && dropoffHeaderIndex !== -1) {
-    const pickupEndIndex = lines.findIndex(
-      (line, index) =>
-        index > pickupHeaderIndex && /1022 East Troy Avenue/i.test(line)
-    );
+  const delivery = deliveryMatch
+    ? `Delivery Information: ${normalizeText(deliveryMatch[1])}`
+    : "Delivery Information: Not Found";
 
-    const pickupLines = lines.slice(pickupHeaderIndex + 1, pickupEndIndex);
-    pickupInfo = pickupLines.join("<br>");
-
-    const deliveryLines = lines.slice(pickupEndIndex);
-    const endMarkerIndex = deliveryLines.findIndex((line) =>
-      /Dodge Ram 2500 \(2010\)/i.test(line)
-    );
-    const finalDeliveryLines =
-      endMarkerIndex !== -1
-        ? deliveryLines.slice(0, endMarkerIndex)
-        : deliveryLines;
-    deliveryInfo = finalDeliveryLines.join("<br>");
-  }
-
-  return { pickup: pickupInfo, delivery: deliveryInfo };
+  return { pickup, delivery };
 };
-
-const extractOrderId = (text) =>
-  text.match(/Auction ID #\s*(\d+)/i)?.[1] || "N/A";
 
 app.get("/", (req, res) => {
   res.send(`
@@ -77,20 +67,22 @@ app.post("/upload", upload.single("file"), async (req, res) => {
   try {
     const dataBuffer = await fs.readFile(filePath);
     const data = await pdf(dataBuffer);
-    const extractedText = data.text;
+    const extractedText = normalizeText(data.text);
 
+    const orderId = extractOrderId(extractedText);
     const vin = extractVin(extractedText);
     const vehicleInfo = extractVehicleInfo(extractedText);
     const { pickup, delivery } = extractPickupAndDeliveryInfo(extractedText);
-    const orderId = extractOrderId(extractedText);
+
+    console.log(extractedText);
 
     res.send(`
       <h1>Extracted Information</h1>
       <p><strong>Order ID:</strong> ${orderId}</p>
       <p><strong>VIN:</strong> ${vin}</p>
       <p><strong>Vehicle:</strong> ${vehicleInfo}</p>
-      <p><strong>Pickup Information:</strong> ${pickup}</p>
-      <p><strong>Delivery Information:</strong> ${delivery}</p>
+      <p><strong>${pickup}</strong></p>
+      <p><strong>${delivery}</strong></p>
       <a href="/">Upload another PDF</a>
     `);
   } catch (error) {
